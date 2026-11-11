@@ -1,0 +1,27 @@
+# Config for run-scheduled-backup.sh. Install as /etc/backup/backup.conf (root-owned, 600).
+# This file is sourced by bash, so use bash syntax.
+
+RCLONE_REMOTE="gdrive-crypt"
+RCLONE_CONFIG_FILE="/home/turing/.config/rclone/rclone.conf"
+
+# Directories to back up. Each one gets its own folder and snapshot on the remote.
+BACKUP_DIRS=(
+  /mnt/vault/share
+  /mnt/vault/immich
+  /mnt/vault/nextcloud
+  /home/turing
+)
+
+STOP_DOCKER=yes                              # stop Docker during the backup
+DOCKER_UNITS=(docker.socket docker.service)
+ATTEMPTS=2                                   # tries per directory
+
+LOG_FILE="/var/log/backup/scheduled-backup.log"
+STATUS_FILE="/var/lib/backup/last-run.status"
+
+# Optional: called with one message argument whenever a run exits non-zero
+# (backup failed, partial, Docker not stopped, or Docker not restarted).
+# Remove the function to disable alerts. Example using ntfy (pick your own topic):
+# on_backup_failure() {
+#   curl -fsS -H "Title: Backup failed" -d "$1" https://ntfy.sh/<your-private-topic>
+# }

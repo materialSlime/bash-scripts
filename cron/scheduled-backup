@@ -1,0 +1,3 @@
+# Install as /etc/cron.d/scheduled-backup (replaces /etc/cron.d/data-backup).
+# Weekly offsite backup, Monday 00:00. The script stops Docker and always starts it again.
+0 0 * * 1 root /usr/local/sbin/bash-scripts/backup/run-scheduled-backup.sh /etc/backup/backup.conf
