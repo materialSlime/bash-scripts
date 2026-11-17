@@ -19,9 +19,14 @@ ATTEMPTS=2                                   # tries per directory
 LOG_FILE="/var/log/backup/scheduled-backup.log"
 STATUS_FILE="/var/lib/backup/last-run.status"
 
-# Optional: called with one message argument whenever a run exits non-zero
-# (backup failed, partial, Docker not stopped, or Docker not restarted).
-# Remove the function to disable alerts. Example using ntfy (pick your own topic):
-# on_backup_failure() {
-#   curl -fsS -H "Title: Backup failed" -d "$1" https://ntfy.sh/<your-private-topic>
-# }
+# --- Notifications (ntfy) ---
+# Leave NTFY_URL empty to turn notifications off.
+NTFY_URL=""                     # e.g. "https://ntfy.sh/<your-private-topic>"
+NTFY_TOKEN=""                   # only for protected topics / self-hosted ntfy
+NTFY_NOTIFY_ON="all"            # all = success + failure | failure | none
+# Failure covers: a folder failed, Docker couldn't be stopped, or Docker didn't restart.
+
+# --- Optional custom hooks ---
+# Called with one message argument, in addition to ntfy. Define only if needed.
+# on_backup_success() { :; }
+# on_backup_failure() { :; }

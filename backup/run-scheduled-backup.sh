@@ -31,6 +31,10 @@ DOCKER_UNITS=(${DOCKER_UNITS[@]:-docker.socket docker.service})
 ATTEMPTS=${ATTEMPTS:-2}
 STATUS_FILE=${STATUS_FILE:-/var/lib/backup/last-run.status}
 LOCK_FILE=${LOCK_FILE:-/run/lock/scheduled-backup.lock}
+NTFY_URL=${NTFY_URL:-}
+NTFY_TOKEN=${NTFY_TOKEN:-}
+NTFY_NOTIFY_ON=${NTFY_NOTIFY_ON:-all}
+[[ $NTFY_NOTIFY_ON =~ ^(all|failure|none)$ ]] || die "NTFY_NOTIFY_ON must be all, failure or none"
 
 # Send all output to the log file when one is set (cron then needs no redirect).
 if [[ -n ${LOG_FILE:-} ]]; then
@@ -77,6 +81,33 @@ failed=${failed[*]}
 STATUS
 }
 
+# format_duration SECONDS  ->  "1h 23m 4s"
+format_duration() {
+  local s=$1
+  if ((s >= 3600)); then
+    printf '%dh %dm %ds' $((s / 3600)) $((s % 3600 / 60)) $((s % 60))
+  elif ((s >= 60)); then
+    printf '%dm %ds' $((s / 60)) $((s % 60))
+  else
+    printf '%ds' "$s"
+  fi
+}
+
+# ntfy_send TITLE PRIORITY TAG MESSAGE   No-op when NTFY_URL is unset.
+# A failed notification is logged but never changes the backup's exit code.
+ntfy_send() {
+  [[ -n $NTFY_URL ]] || return 0
+  local auth=()
+  [[ -n $NTFY_TOKEN ]] && auth=(-H "Authorization: Bearer $NTFY_TOKEN")
+  if curl -fsS --max-time 30 --retry 3 --retry-delay 10 -o /dev/null \
+    "${auth[@]}" -H "Title: $1" -H "Priority: $2" -H "Tags: $3" \
+    -d "$4" "$NTFY_URL"; then
+    log INFO "ntfy notification sent: $1"
+  else
+    log WARN "ntfy notification failed: $1"
+  fi
+}
+
 # Runs on every exit (normal, error, or killed with TERM/INT).
 finish() {
   trap - EXIT
@@ -84,9 +115,25 @@ finish() {
     start_docker || { log ERROR "Docker did NOT come back up"; exit_code=4; }
   fi
   write_status
-  if ((exit_code != 0)) && declare -F on_backup_failure >/dev/null; then
-    on_backup_failure "Backup exit=$exit_code result=$result on $(hostname): failed=[${failed[*]}] docker=$docker_state (see ${LOG_FILE:-journal})" ||
-      log WARN "on_backup_failure hook failed"
+
+  local duration msg
+  duration=$(format_duration "$SECONDS")
+  if ((exit_code == 0)); then
+    msg="${#ok[@]} folder(s) backed up in $duration. Docker: $docker_state."
+    if [[ $NTFY_NOTIFY_ON == all ]]; then
+      ntfy_send "Backup OK on $(hostname)" default white_check_mark "$msg"
+    fi
+    if declare -F on_backup_success >/dev/null; then
+      on_backup_success "$msg" || log WARN "on_backup_success hook failed"
+    fi
+  else
+    msg="Result: $result (exit $exit_code) after $duration. Failed: ${failed[*]:-none}. Docker: $docker_state. Log: ${LOG_FILE:-stdout}"
+    if [[ $NTFY_NOTIFY_ON == all || $NTFY_NOTIFY_ON == failure ]]; then
+      ntfy_send "Backup FAILED on $(hostname)" high rotating_light "$msg"
+    fi
+    if declare -F on_backup_failure >/dev/null; then
+      on_backup_failure "$msg" || log WARN "on_backup_failure hook failed"
+    fi
   fi
   log INFO "Run finished: result=$result exit=$exit_code docker=$docker_state"
   exit "$exit_code"
