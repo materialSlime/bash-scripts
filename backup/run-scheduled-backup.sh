@@ -68,7 +68,7 @@ started=$(date "+$LOG_DATE_FORMAT")
 result=failed docker_state=untouched exit_code=1
 ok=() failed=()
 docker_stopped_at="" docker_downtime=""
-maintenance=skipped maintenance_note="" repo_bytes="" preflight_error=""
+maintenance=skipped maintenance_note="" repo_bytes="" preflight_error="" current_dir=""
 report_file=$(mktemp -t scheduled-backup-report.XXXXXX) || die "Could not create report file"
 
 stop_docker() {
@@ -238,6 +238,9 @@ ntfy_send() {
 # Runs on every exit (normal, error, or killed with TERM/INT).
 finish() {
   trap - EXIT
+  # Cleanup must finish even if Ctrl-C is pressed again: Docker restart,
+  # status file and notification.
+  trap '' INT TERM HUP
   if [[ $docker_state == stopped ]]; then
     start_docker || { log ERROR "Docker did NOT come back up"; exit_code=4; }
   fi
@@ -264,6 +267,7 @@ $details"
   else
     local why
     case $exit_code in
+    130) why="Cancelled (Ctrl-C or stop signal) while backing up${current_dir:+ $current_dir}; the next run continues where it stopped" ;;
     2) why="Backup did not start: $preflight_error" ;;
     3) why="Docker could not be stopped, so nothing was backed up" ;;
     4) why="Docker did NOT come back up, check it now" ;;
@@ -285,7 +289,7 @@ Log: ${LOG_FILE:-stdout}"
   exit "$exit_code"
 }
 trap finish EXIT
-trap 'log ERROR "Interrupted"; exit 1' INT TERM
+trap 'log ERROR "Interrupted"; result=cancelled exit_code=130; exit' INT TERM HUP
 
 log INFO "=== Scheduled backup started (config: $conf) ==="
 
@@ -326,6 +330,7 @@ fi
 
 
 for dir in "${BACKUP_DIRS[@]}"; do
+  current_dir=$dir
   if "${backup_cmd[@]}" -a "$ATTEMPTS" --report "$report_file" "$dir"; then
     ok+=("$dir")
   else

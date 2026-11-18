@@ -68,6 +68,9 @@ restic_require_repo
 
 tmp_dir=$(mktemp -d -t backup-dir-to-restic.XXXXXX) || die "Could not create temp dir"
 trap 'rm -rf "$tmp_dir"' EXIT
+# Cancelled (Ctrl-C, systemctl stop, closed terminal): stop now, don't retry.
+# Data already uploaded stays in the repository and is reused next run.
+trap 'log WARN "Interrupted, stopping without retry"; exit 130' INT TERM HUP
 
 # One progress line a minute in --json mode instead of many per second.
 export RESTIC_PROGRESS_FPS=0.0166
