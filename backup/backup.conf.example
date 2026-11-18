@@ -1,10 +1,27 @@
 # Config for run-scheduled-backup.sh. Install as /etc/backup/backup.conf (root-owned, 600).
 # This file is sourced by bash, so use bash syntax.
 
-RCLONE_REMOTE="gdrive-crypt"
-RCLONE_CONFIG_FILE="/home/turing/.config/rclone/rclone.conf"
+# --- Backend ---
+# restic (default): deduplicated, encrypted snapshots in one repository.
+# tar: the old GNU tar incremental archives streamed to RCLONE_REMOTE.
+BACKEND="restic"
 
-# Directories to back up. Each one gets its own folder and snapshot on the remote.
+RCLONE_CONFIG_FILE="/home/turing/.config/rclone/rclone.conf"   # used by both backends
+
+# restic settings
+RESTIC_REPOSITORY="rclone:gdrive:restic-backup"
+RESTIC_PASSWORD_FILE="/etc/backup/restic.pass"   # root-owned, 600. KEEP A COPY ELSEWHERE:
+                                                 # without it the backups can't be decrypted.
+KEEP_WEEKLY=26          # weekly snapshots kept for ~6 months...
+KEEP_MONTHLY=24         # ...then one (the last) per month for 2 years
+CHECK_READ_SUBSET="2%"  # share of stored data downloaded and verified each run
+# RESTIC_EXCLUDE_FILE="/etc/backup/excludes.txt"  # optional, one pattern per line
+# RESTIC_CACHE_DIR="/var/cache/restic"            # optional, default /root/.cache/restic
+
+# tar settings (only for BACKEND=tar)
+RCLONE_REMOTE="gdrive-crypt"
+
+# Directories to back up. Each one gets its own snapshot (restic tag = folder name).
 BACKUP_DIRS=(
   /mnt/vault/share
   /mnt/vault/immich
@@ -24,7 +41,8 @@ STATUS_FILE="/var/lib/backup/last-run.status"
 NTFY_URL=""                     # e.g. "https://ntfy.sh/<your-private-topic>"
 NTFY_TOKEN=""                   # only for protected topics / self-hosted ntfy
 NTFY_NOTIFY_ON="all"            # all = success + failure | failure | none
-# Failure covers: a folder failed, Docker couldn't be stopped, or Docker didn't restart.
+# Failure covers: a folder failed, Docker couldn't be stopped, Docker didn't restart,
+# or restic maintenance (forget/prune/check) failed.
 
 # --- Optional custom hooks ---
 # Called with one message argument, in addition to ntfy. Define only if needed.
