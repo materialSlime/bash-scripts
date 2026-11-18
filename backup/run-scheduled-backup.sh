@@ -48,10 +48,12 @@ flock -n 9 || die "Another backup run is in progress"
 started=$(date "+$LOG_DATE_FORMAT")
 result=failed docker_state=untouched exit_code=1
 ok=() failed=()
+docker_stopped_at="" docker_downtime=""
+report_file=$(mktemp -t scheduled-backup-report.XXXXXX) || die "Could not create report file"
 
 stop_docker() {
   log INFO "Stopping ${DOCKER_UNITS[*]}"
-  systemctl stop "${DOCKER_UNITS[@]}" && docker_state=stopped
+  systemctl stop "${DOCKER_UNITS[@]}" && docker_state=stopped docker_stopped_at=$SECONDS
 }
 
 start_docker() {
@@ -60,6 +62,7 @@ start_docker() {
     log INFO "Starting ${DOCKER_UNITS[*]} (try $try/3)"
     if systemctl start "${DOCKER_UNITS[@]}"; then
       docker_state=restarted
+      docker_downtime=$(human_duration $((SECONDS - docker_stopped_at)))
       return 0
     fi
     sleep 10
@@ -78,19 +81,40 @@ exit_code=$exit_code
 docker=$docker_state
 ok=${ok[*]}
 failed=${failed[*]}
+uploaded_bytes=$(total_uploaded)
 STATUS
+  # One line per folder, same fields as the backup-dir-to-rclone.sh report.
+  local name rest
+  while IFS=$'\t' read -r name rest; do
+    printf 'folder.%s=%s\n' "$name" "$rest"
+  done <"$report_file" >>"$STATUS_FILE"
 }
 
-# format_duration SECONDS  ->  "1h 23m 4s"
-format_duration() {
-  local s=$1
-  if ((s >= 3600)); then
-    printf '%dh %dm %ds' $((s / 3600)) $((s % 3600 / 60)) $((s % 60))
-  elif ((s >= 60)); then
-    printf '%dm %ds' $((s / 60)) $((s % 60))
-  else
-    printf '%ds' "$s"
-  fi
+# total_uploaded   Sum of archive_bytes over successful folders.
+total_uploaded() {
+  awk -F'\t' '$2 == "ok" && $5 ~ /^[0-9]+$/ { t += $5 } END { print t + 0 }' "$report_file"
+}
+
+# folder_lines   One readable line per folder, for the notification and the log.
+folder_lines() {
+  local name status type changed abytes rbytes rcount secs tries error
+  while IFS=$'\t' read -r name status type changed abytes rbytes rcount secs tries error; do
+    if [[ $status == ok ]]; then
+      printf '✅ %s: %s, %s file(s), %s in %s' "$name" "$type" "$changed" \
+        "$(human_bytes "$abytes")" "$(human_duration "$secs")"
+      ((tries > 1)) && printf ' (try %s)' "$tries"
+      printf ' | Drive: %s in %s archive(s)\n' "$(human_bytes "$rbytes")" "$rcount"
+    else
+      printf '❌ %s: %s (%s attempt(s), %s)\n' "$name" "$error" "$tries" "$(human_duration "$secs")"
+    fi
+  done <"$report_file"
+}
+
+# docker_line   e.g. "Docker: restarted (down 1h 2m 3s)"
+docker_line() {
+  printf 'Docker: %s' "$docker_state"
+  [[ -n $docker_downtime ]] && printf ' (down %s)' "$docker_downtime"
+  printf '\n'
 }
 
 # ntfy_send TITLE PRIORITY TAG MESSAGE   No-op when NTFY_URL is unset.
@@ -116,10 +140,16 @@ finish() {
   fi
   write_status
 
-  local duration msg
-  duration=$(format_duration "$SECONDS")
+  local duration details msg
+  duration=$(human_duration "$SECONDS")
+  details="$(folder_lines)
+$(docker_line)"
+  log INFO "Per-folder results:"
+  while IFS= read -r line; do log INFO "  $line"; done <<<"$details"
+
   if ((exit_code == 0)); then
-    msg="${#ok[@]} folder(s) backed up in $duration. Docker: $docker_state."
+    msg="${#ok[@]}/${#BACKUP_DIRS[@]} folders OK, $(human_bytes "$(total_uploaded)") uploaded in $duration
+$details"
     if [[ $NTFY_NOTIFY_ON == all ]]; then
       ntfy_send "Backup OK on $(hostname)" default white_check_mark "$msg"
     fi
@@ -127,7 +157,15 @@ finish() {
       on_backup_success "$msg" || log WARN "on_backup_success hook failed"
     fi
   else
-    msg="Result: $result (exit $exit_code) after $duration. Failed: ${failed[*]:-none}. Docker: $docker_state. Log: ${LOG_FILE:-stdout}"
+    local why
+    case $exit_code in
+    3) why="Docker could not be stopped, so nothing was backed up" ;;
+    4) why="Docker did NOT come back up, check it now" ;;
+    *) why="${#failed[@]}/${#BACKUP_DIRS[@]} folder(s) failed" ;;
+    esac
+    msg="$why ($result, exit $exit_code, $duration)
+$details
+Log: ${LOG_FILE:-stdout}"
     if [[ $NTFY_NOTIFY_ON == all || $NTFY_NOTIFY_ON == failure ]]; then
       ntfy_send "Backup FAILED on $(hostname)" high rotating_light "$msg"
     fi
@@ -135,6 +173,7 @@ finish() {
       on_backup_failure "$msg" || log WARN "on_backup_failure hook failed"
     fi
   fi
+  rm -f "$report_file"
   log INFO "Run finished: result=$result exit=$exit_code docker=$docker_state"
   exit "$exit_code"
 }
@@ -153,7 +192,7 @@ fi
 
 for dir in "${BACKUP_DIRS[@]}"; do
   if "$SCRIPT_DIR/backup-dir-to-rclone.sh" -r "$RCLONE_REMOTE" -c "$RCLONE_CONFIG_FILE" \
-    -a "$ATTEMPTS" "$dir"; then
+    -a "$ATTEMPTS" --report "$report_file" "$dir"; then
     ok+=("$dir")
   else
     failed+=("$dir")

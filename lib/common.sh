@@ -29,3 +29,22 @@ require_cmd() {
 need_value() {
   [[ $# -ge 2 && -n $2 && $2 != -* ]] || die "Option $1 needs a value"
 }
+
+# human_bytes N   ->  "1.2G" ("-" passes through)
+human_bytes() {
+  [[ $1 =~ ^[0-9]+$ ]] || { printf '%s' "$1"; return; }
+  (($1 < 1024)) && { printf "%sB" "$1"; return; }
+  numfmt --to=iec --suffix=B --format='%.1f' "$1"
+}
+
+# human_duration SECONDS  ->  "1h 23m 4s"
+human_duration() {
+  local s=$1
+  if ((s >= 3600)); then
+    printf '%dh %dm %ds' $((s / 3600)) $((s % 3600 / 60)) $((s % 60))
+  elif ((s >= 60)); then
+    printf '%dm %ds' $((s / 60)) $((s % 60))
+  else
+    printf '%ds' "$s"
+  fi
+}
