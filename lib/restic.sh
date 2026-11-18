@@ -20,6 +20,11 @@ restic_setup() {
   [[ -n ${3:-} ]] && export RCLONE_CONFIG="$3"
   # Pack files are staged in TMPDIR; Fedora's /tmp lives in RAM.
   export TMPDIR=${RESTIC_TMPDIR:-/var/tmp}
+  # restic finds its cache via $HOME, which systemd-run services and `env -i`
+  # don't set; fall back to the user's home from the passwd database.
+  if [[ -z ${RESTIC_CACHE_DIR:-} && -z ${XDG_CACHE_HOME:-} && -z ${HOME:-} ]]; then
+    RESTIC_CACHE_DIR="$(getent passwd "$(id -u)" | cut -d: -f6)/.cache/restic"
+  fi
   [[ -n ${RESTIC_CACHE_DIR:-} ]] && export RESTIC_CACHE_DIR
   return 0
 }

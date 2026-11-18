@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# brestic: run any restic command against the backup repository, with the
+# repository, password file and rclone config taken from the backup config.
+# Run it with sudo, since the config and password file are root-only:
+#
+#   sudo brestic snapshots
+#   sudo brestic snapshots --tag immich
+#   sudo brestic ls latest --tag turing /home/turing/notes
+#   sudo brestic diff <id1> <id2>
+#   sudo brestic mount /mnt/restic
+#   sudo brestic stats --mode raw-data
+#   sudo brestic -C /etc/backup/other.conf snapshots   # another config
+#
+# Everything after the optional -C goes to restic unchanged.
+set -uo pipefail
+
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+source "$SCRIPT_DIR/../lib/common.sh"
+source "$SCRIPT_DIR/../lib/restic.sh"
+
+conf=${BACKUP_CONF:-/etc/backup/backup.conf}
+if [[ ${1:-} == -C ]]; then
+  need_value "$@"
+  conf=$2
+  shift 2
+fi
+if [[ ${1:-} =~ ^(-h|--help|)$ ]]; then
+  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
+[[ -r $conf ]] || die "Config not readable: $conf (run with sudo)"
+source "$conf"
+require_cmd restic
+restic_setup "${RESTIC_REPOSITORY:-}" "${RESTIC_PASSWORD_FILE:-}" "${RCLONE_CONFIG_FILE:-}"
+exec restic "$@"
